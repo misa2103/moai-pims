@@ -12,7 +12,10 @@ export const ImportBatchList: React.FC = () => {
     initialPageSize: 25,
     syncWithLocation: true,
     sorters: { initial: [{ field: "created_at", order: "desc" }] },
-    liveMode: "auto",
+    liveMode: "off",
+    queryOptions: {
+      refetchInterval: 15000,
+    },
   });
 
   const columns = React.useMemo<GridColDef[]>(

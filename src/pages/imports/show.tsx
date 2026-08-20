@@ -76,8 +76,12 @@ export const ImportBatchShow: React.FC = () => {
   const { data: batch, isLoading: isBatchLoading } = useOne({
     resource: "v_product_import_batch_stats",
     id,
-    liveMode: "auto",
-    queryOptions: { enabled: !!id },
+    liveMode: "off",
+    queryOptions: {
+      enabled: !!id,
+      refetchInterval: (data) =>
+        data?.data?.status === "processing" ? 5000 : false,
+    },
   });
 
   // ── Permanent filter for items grid ───────────────────────────────────────
@@ -91,9 +95,13 @@ export const ImportBatchShow: React.FC = () => {
     resource: "v_product_import_items",
     filters: { permanent: permanentFilters },
     initialPageSize: 50,
-    liveMode: "auto",
+    liveMode: "off",
     sorters: { initial: [{ field: "created_at", order: "asc" }] },
-    queryOptions: { enabled: !!id, keepPreviousData: true },
+    queryOptions: {
+      enabled: !!id,
+      keepPreviousData: true,
+      refetchInterval: 5000,
+    },
   });
 
   const columns = React.useMemo<GridColDef[]>(

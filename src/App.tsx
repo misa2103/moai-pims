@@ -106,6 +106,7 @@ function App() {
                   syncWithLocation: true,
                   warnWhenUnsavedChanges: true,
                   useNewQueryKeys: true,
+                  liveMode: "off",
                   projectId: "W0Fi2f-Mo7l0v-oNhizO",
                   title: { text: "JLine - PIMS", icon: <AppIcon /> },
                 }}

@@ -58,6 +58,9 @@ export const ProductList = () => {
         initialPageSize: 25,
         syncWithLocation: true,
         sorters: { initial: [{ field: "modified_on", order: "desc" }] },
+        meta: {
+            select: "id,search_name,quantity,duty_tax,transport,margin,price_supplier,total_price_supplier,unit_price_mur,sales_price,sales_price_shop,stock_available,ean_code,intrastat,long_desc_en,sync_status",
+        },
     });
 
     const [search, setSearch] = React.useState("");
