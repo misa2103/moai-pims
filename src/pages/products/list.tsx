@@ -7,8 +7,11 @@ import {
     GridToolbar,
     GridRowModel,
 } from "@mui/x-data-grid";
-import { Box } from "@mui/material";
+import { Box, Chip, IconButton, Tooltip, CircularProgress } from "@mui/material";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
+import CloudSyncIcon from "@mui/icons-material/CloudSync";
+
+type IncwoWcStatus = "never_synced" | "syncing" | "synced" | "error" | null | undefined;
 
 type FlatRow = {
     id: string; // product_id
@@ -26,6 +29,11 @@ type FlatRow = {
     ean_code?: string;
     intrastat?: string;
     long_desc_en?: string;
+    sync_status?: string; // pipeline PIMS -> Odoo (import produit), distinct de incwo_wc_status
+    // Statut de l'envoi manuel Incwo + WooCommerce (distinct de sync_status ci-dessus)
+    incwo_wc_status?: IncwoWcStatus;
+    incwo_wc_synced_at?: string | null;
+    incwo_wc_error?: string | null;
 };
 
 const EDITABLE_FIELDS = new Set<keyof FlatRow>([
@@ -46,10 +54,75 @@ const NUMERIC_FIELDS = new Set<keyof FlatRow>([
 
 const SUPABASE_META_PK = { idColumnName: "product_id" };
 
-function toNumberOrZero(value: unknown): number {
-    if (value === null || value === undefined || value === "") return 0;
-    const n = Number(value);
-    return Number.isFinite(n) ? n : 0;
+// ---------------------------------------------------------------------------
+// Config webhook n8n (envoi manuel d'un produit vers Incwo + WooCommerce)
+//
+// ATTENTION SECURITE: ces identifiants Basic Auth partent depuis le
+// navigateur et sont donc visibles dans le bundle JS / les requetes reseau
+// pour quiconque a acces a l'app. Acceptable pour un outil interne restreint,
+// mais si un durcissement est necessaire plus tard, faire transiter cet appel
+// par un petit backend/proxy qui detient le secret cote serveur.
+// ---------------------------------------------------------------------------
+const INCWO_WC_WEBHOOK_URL = import.meta.env.VITE_N8N_INCWO_WC_WEBHOOK_URL as string;
+const INCWO_WC_WEBHOOK_USER = import.meta.env.VITE_N8N_INCWO_WC_WEBHOOK_USER as string;
+const INCWO_WC_WEBHOOK_PASS = import.meta.env.VITE_N8N_INCWO_WC_WEBHOOK_PASS as string;
+
+type SyncResponse = {
+    success: boolean;
+    sku: string;
+    odoo_id?: number;
+    incwo_id?: number | string | null;
+    woo_id?: number | string | null;
+    message: string;
+};
+
+async function sendProductToIncwoWc(sku: string): Promise<SyncResponse> {
+    const auth = btoa(`${INCWO_WC_WEBHOOK_USER}:${INCWO_WC_WEBHOOK_PASS}`);
+
+    const response = await fetch(INCWO_WC_WEBHOOK_URL, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            Authorization: `Basic ${auth}`,
+        },
+        body: JSON.stringify({ sku }),
+    });
+
+    // Le workflow n8n repond toujours en JSON, meme en erreur (404 SKU
+    // introuvable, 500 erreur de sync) - on tente donc de parser le corps
+    // dans tous les cas pour recuperer le message metier.
+    let payload: SyncResponse | null = null;
+    try {
+        payload = await response.json();
+    } catch {
+        // ignore, on retombe sur le message generique ci-dessous
+    }
+
+    if (!response.ok || !payload || payload.success !== true) {
+        const message = payload?.message || `Echec de la synchronisation (HTTP ${response.status})`;
+        throw new Error(message);
+    }
+
+    return payload;
+}
+
+const INCWO_WC_STATUS_CONFIG: Record<
+    string,
+    { label: string; color: "default" | "warning" | "success" | "error" }
+> = {
+    never_synced: { label: "Jamais envoye", color: "default" },
+    syncing: { label: "En cours...", color: "warning" },
+    synced: { label: "Synced", color: "success" },
+    error: { label: "Erreur", color: "error" },
+};
+
+function IncwoWcStatusChip({ status, error }: { status: IncwoWcStatus; error?: string | null }) {
+    const config = INCWO_WC_STATUS_CONFIG[status || "never_synced"] ?? INCWO_WC_STATUS_CONFIG.never_synced;
+    return (
+        <Tooltip title={status === "error" && error ? error : ""} disableHoverListener={!error}>
+            <Chip size="small" label={config.label} color={config.color} variant={status === "synced" ? "filled" : "outlined"} />
+        </Tooltip>
+    );
 }
 
 export const ProductList = () => {
@@ -59,15 +132,64 @@ export const ProductList = () => {
         syncWithLocation: true,
         sorters: { initial: [{ field: "modified_on", order: "desc" }] },
         meta: {
-            select: "id,search_name,quantity,duty_tax,transport,margin,price_supplier,total_price_supplier,unit_price_mur,sales_price,sales_price_shop,stock_available,ean_code,intrastat,long_desc_en,sync_status",
+            select:
+                "id,search_name,quantity,duty_tax,transport,margin,price_supplier,total_price_supplier,unit_price_mur,sales_price,sales_price_shop,stock_available,ean_code,intrastat,long_desc_en,sync_status,incwo_wc_status,incwo_wc_synced_at,incwo_wc_error",
         },
     });
 
     const [search, setSearch] = React.useState("");
 
+    // Lignes en cours d'envoi vers Incwo/WC (state local, la requete etant bloquante)
+    const [sendingRowIds, setSendingRowIds] = React.useState<Set<string>>(new Set());
+
     const { mutate: updatePrice } = useUpdate();
     const invalidate = useInvalidate();
     const { open: notify } = useNotification();
+
+    const handleSendToIncwoWc = React.useCallback(
+        async (row: FlatRow) => {
+            const sku = row.search_name?.trim();
+            if (!sku) {
+                notify?.({
+                    type: "error",
+                    message: "Envoi impossible",
+                    description: "Ce produit n'a pas de SKU (search_name) renseigne.",
+                });
+                return;
+            }
+
+            setSendingRowIds((prev) => new Set(prev).add(row.id));
+
+            try {
+                const result = await sendProductToIncwoWc(sku);
+                notify?.({
+                    type: "success",
+                    message: "Envoye vers Incwo + WooCommerce",
+                    description: `${sku} - ${result.message}`,
+                });
+            } catch (error: any) {
+                notify?.({
+                    type: "error",
+                    message: "Echec de l'envoi",
+                    description: error?.message ?? "Erreur inconnue durant la synchronisation",
+                });
+            } finally {
+                setSendingRowIds((prev) => {
+                    const next = new Set(prev);
+                    next.delete(row.id);
+                    return next;
+                });
+                // Le workflow n8n a deja ecrit le statut final dans Supabase
+                // (incwo_wc_status/incwo_wc_synced_at/incwo_wc_error) - on
+                // rafraichit juste la liste pour l'afficher.
+                invalidate({
+                    resource: "product_flat_table",
+                    invalidates: ["list", "many"],
+                });
+            }
+        },
+        [invalidate, notify],
+    );
 
     // Called by DataGrid when an edit is committed (cell/row)
     const processRowUpdate = React.useCallback(
@@ -153,12 +275,26 @@ export const ProductList = () => {
                 headerName: "Actions",
                 sortable: false,
                 filterable: false,
-                width: 80,
-                renderCell: ({ row }) => (
-                    <Box sx={{ display: "flex", gap: 1 }}>
-                        <ShowButton hideText resource="product_flat_table" recordItemId={row.id} />
-                    </Box>
-                ),
+                width: 120,
+                renderCell: ({ row }) => {
+                    const isSending = sendingRowIds.has(row.id);
+                    return (
+                        <Box sx={{ display: "flex", gap: 1 }}>
+                            <ShowButton hideText resource="product_flat_table" recordItemId={row.id} />
+                            <Tooltip title="Envoyer vers Incwo + WooCommerce">
+                                <span>
+                                    <IconButton
+                                        size="small"
+                                        disabled={isSending || !row.search_name}
+                                        onClick={() => handleSendToIncwoWc(row)}
+                                    >
+                                        {isSending ? <CircularProgress size={18} /> : <CloudSyncIcon fontSize="small" />}
+                                    </IconButton>
+                                </span>
+                            </Tooltip>
+                        </Box>
+                    );
+                },
             },
             { field: "search_name", headerName: "SKU", minWidth: 80, flex: 0.6 },
             { field: "quantity", headerName: "Quantity", minWidth: 80, flex: 0.6, editable: true, type: "number" },
@@ -174,9 +310,18 @@ export const ProductList = () => {
             { field: "ean_code", headerName: "EAN", minWidth: 160, flex: 0.6 },
             { field: "intrastat", headerName: "Intrastat", minWidth: 120 },
             { field: "long_desc_en", headerName: "Name", minWidth: 340, flex: 1.4 },
-            { field: "sync_status", headerName: "Status", minWidth: 340, flex: 1.4 },
+            { field: "sync_status", headerName: "PIMS Status", minWidth: 200, flex: 0.8 },
+            {
+                field: "incwo_wc_status",
+                headerName: "Incwo/WC Status",
+                minWidth: 180,
+                flex: 0.8,
+                renderCell: ({ row }) => (
+                    <IncwoWcStatusChip status={row.incwo_wc_status} error={row.incwo_wc_error} />
+                ),
+            },
         ],
-        [],
+        [sendingRowIds, handleSendToIncwoWc],
     );
 
     return (
@@ -228,3 +373,9 @@ export const ProductList = () => {
         </List>
     );
 };
+
+function toNumberOrZero(value: unknown): number {
+    if (value === null || value === undefined || value === "") return 0;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+}
