@@ -310,7 +310,7 @@ export const ProductList = () => {
             { field: "ean_code", headerName: "EAN", minWidth: 160, flex: 0.6 },
             { field: "intrastat", headerName: "Intrastat", minWidth: 120 },
             { field: "long_desc_en", headerName: "Name", minWidth: 340, flex: 1.4 },
-            { field: "sync_status", headerName: "PIMS Status", minWidth: 200, flex: 0.8 },
+            { field: "sync_status", headerName: "PIMS Status", minWidth: 100, flex: 0.8 },
             {
                 field: "incwo_wc_status",
                 headerName: "Incwo/WC Status",
