@@ -106,15 +106,16 @@ async function sendProductToIncwoWc(sku: string): Promise<SyncResponse> {
     return payload;
 }
 
-const INCWO_WC_STATUS_CONFIG: Record
-string,
+const INCWO_WC_STATUS_CONFIG: Record<
+    string,
     { label: string; color: "default" | "warning" | "success" | "error" }
-    > = {
+> = {
     never_synced: { label: "Jamais envoye", color: "default" },
     syncing: { label: "En cours...", color: "warning" },
     synced: { label: "Synced", color: "success" },
     error: { label: "Erreur", color: "error" },
 };
+
 
 function IncwoWcStatusChip({ status, error }: { status: IncwoWcStatus; error?: string | null }) {
     const config = INCWO_WC_STATUS_CONFIG[status || "never_synced"] ?? INCWO_WC_STATUS_CONFIG.never_synced;
