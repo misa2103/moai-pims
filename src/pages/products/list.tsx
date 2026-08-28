@@ -106,10 +106,10 @@ async function sendProductToIncwoWc(sku: string): Promise<SyncResponse> {
     return payload;
 }
 
-const INCWO_WC_STATUS_CONFIG: Record<
-    string,
+const INCWO_WC_STATUS_CONFIG: Record
+string,
     { label: string; color: "default" | "warning" | "success" | "error" }
-> = {
+    > = {
     never_synced: { label: "Jamais envoye", color: "default" },
     syncing: { label: "En cours...", color: "warning" },
     synced: { label: "Synced", color: "success" },
@@ -297,6 +297,15 @@ export const ProductList = () => {
                 },
             },
             { field: "search_name", headerName: "SKU", minWidth: 80, flex: 0.6 },
+            {
+                field: "incwo_wc_status",
+                headerName: "Incwo/WC Status",
+                minWidth: 180,
+                flex: 0.8,
+                renderCell: ({ row }) => (
+                    <IncwoWcStatusChip status={row.incwo_wc_status} error={row.incwo_wc_error} />
+                ),
+            },
             { field: "quantity", headerName: "Quantity", minWidth: 80, flex: 0.6, editable: true, type: "number" },
             { field: "duty_tax", headerName: "Duty Tax", minWidth: 80, flex: 0.6, editable: true, type: "number" },
             { field: "transport", headerName: "Transport", minWidth: 80, flex: 0.6, editable: true, type: "number" },
@@ -311,15 +320,6 @@ export const ProductList = () => {
             { field: "intrastat", headerName: "Intrastat", minWidth: 120 },
             { field: "long_desc_en", headerName: "Name", minWidth: 340, flex: 1.4 },
             { field: "sync_status", headerName: "PIMS Status", minWidth: 100, flex: 0.8 },
-            {
-                field: "incwo_wc_status",
-                headerName: "Incwo/WC Status",
-                minWidth: 180,
-                flex: 0.8,
-                renderCell: ({ row }) => (
-                    <IncwoWcStatusChip status={row.incwo_wc_status} error={row.incwo_wc_error} />
-                ),
-            },
         ],
         [sendingRowIds, handleSendToIncwoWc],
     );
