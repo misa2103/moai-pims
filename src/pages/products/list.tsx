@@ -10,6 +10,7 @@ import {
 import { Box, Chip, IconButton, Tooltip, CircularProgress } from "@mui/material";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import CloudSyncIcon from "@mui/icons-material/CloudSync";
+import SyncIcon from "@mui/icons-material/Sync";
 
 type IncwoWcStatus = "never_synced" | "syncing" | "synced" | "error" | null | undefined;
 
@@ -67,6 +68,13 @@ const INCWO_WC_WEBHOOK_URL = import.meta.env.VITE_N8N_INCWO_WC_WEBHOOK_URL as st
 const INCWO_WC_WEBHOOK_USER = import.meta.env.VITE_N8N_INCWO_WC_WEBHOOK_USER as string;
 const INCWO_WC_WEBHOOK_PASS = import.meta.env.VITE_N8N_INCWO_WC_WEBHOOK_PASS as string;
 
+// Meme webhook n8n pour les deux cibles -- on distingue via le parametre
+// "action" du body (meme convention que MWF_HERTEX_SYNC_V2 / deco design) :
+//   - "import_incwo" : n'envoie/ne met a jour que Incwo, ne touche pas WC
+//   - "full_sync"     : envoie/met a jour Incwo puis WooCommerce
+// C'est au workflow n8n de brancher son traitement sur ce champ.
+type SyncAction = "import_incwo" | "full_sync";
+
 type SyncResponse = {
     success: boolean;
     sku: string;
@@ -76,7 +84,7 @@ type SyncResponse = {
     message: string;
 };
 
-async function sendProductToIncwoWc(sku: string): Promise<SyncResponse> {
+async function sendProductToIncwoWc(sku: string, action: SyncAction): Promise<SyncResponse> {
     const auth = btoa(`${INCWO_WC_WEBHOOK_USER}:${INCWO_WC_WEBHOOK_PASS}`);
 
     const response = await fetch(INCWO_WC_WEBHOOK_URL, {
@@ -85,7 +93,7 @@ async function sendProductToIncwoWc(sku: string): Promise<SyncResponse> {
             "Content-Type": "application/json",
             Authorization: `Basic ${auth}`,
         },
-        body: JSON.stringify({ sku }),
+        body: JSON.stringify({ sku, action }),
     });
 
     // Le workflow n8n repond toujours en JSON, meme en erreur (404 SKU
@@ -148,7 +156,7 @@ export const ProductList = () => {
     const { open: notify } = useNotification();
 
     const handleSendToIncwoWc = React.useCallback(
-        async (row: FlatRow) => {
+        async (row: FlatRow, action: SyncAction) => {
             const sku = row.search_name?.trim();
             if (!sku) {
                 notify?.({
@@ -161,17 +169,19 @@ export const ProductList = () => {
 
             setSendingRowIds((prev) => new Set(prev).add(row.id));
 
+            const targetLabel = action === "import_incwo" ? "Incwo" : "Incwo + WooCommerce";
+
             try {
-                const result = await sendProductToIncwoWc(sku);
+                const result = await sendProductToIncwoWc(sku, action);
                 notify?.({
                     type: "success",
-                    message: "Envoye vers Incwo + WooCommerce",
+                    message: `Envoye vers ${targetLabel}`,
                     description: `${sku} - ${result.message}`,
                 });
             } catch (error: any) {
                 notify?.({
                     type: "error",
-                    message: "Echec de l'envoi",
+                    message: `Echec de l'envoi (${targetLabel})`,
                     description: error?.message ?? "Erreur inconnue durant la synchronisation",
                 });
             } finally {
@@ -276,18 +286,29 @@ export const ProductList = () => {
                 headerName: "Actions",
                 sortable: false,
                 filterable: false,
-                width: 120,
+                width: 160,
                 renderCell: ({ row }) => {
                     const isSending = sendingRowIds.has(row.id);
                     return (
-                        <Box sx={{ display: "flex", gap: 1 }}>
+                        <Box sx={{ display: "flex", gap: 0.5 }}>
                             <ShowButton hideText resource="product_flat_table" recordItemId={row.id} />
+                            <Tooltip title="Envoyer vers Incwo uniquement">
+                                <span>
+                                    <IconButton
+                                        size="small"
+                                        disabled={isSending || !row.search_name}
+                                        onClick={() => handleSendToIncwoWc(row, "import_incwo")}
+                                    >
+                                        {isSending ? <CircularProgress size={18} /> : <SyncIcon fontSize="small" />}
+                                    </IconButton>
+                                </span>
+                            </Tooltip>
                             <Tooltip title="Envoyer vers Incwo + WooCommerce">
                                 <span>
                                     <IconButton
                                         size="small"
                                         disabled={isSending || !row.search_name}
-                                        onClick={() => handleSendToIncwoWc(row)}
+                                        onClick={() => handleSendToIncwoWc(row, "full_sync")}
                                     >
                                         {isSending ? <CircularProgress size={18} /> : <CloudSyncIcon fontSize="small" />}
                                     </IconButton>
